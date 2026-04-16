@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Test Suite — We the People (and Winter)</title>
+  <style>
+    body { font-family: 'Segoe UI', system-ui, sans-serif; max-width: 800px; margin: 2rem auto; padding: 0 1rem; background: #f8fafc; }
+    h1 { color: #4f46e5; margin-bottom: 0.5rem; }
+    .summary { font-size: 1.2rem; margin-bottom: 1.5rem; padding: 1rem; border-radius: 12px; font-weight: 700; }
+    .summary.pass { background: #dcfce7; color: #16a34a; }
+    .summary.fail { background: #fee2e2; color: #dc2626; }
+    .section { margin-bottom: 1.5rem; }
+    .section h2 { font-size: 1.1rem; color: #1e1b4b; border-bottom: 2px solid #e0e7ff; padding-bottom: 0.3rem; margin-bottom: 0.5rem; }
+    .test { padding: 0.4rem 0.6rem; margin: 0.2rem 0; border-radius: 6px; font-size: 0.9rem; }
+    .test.pass { background: #f0fdf4; color: #166534; }
+    .test.fail { background: #fef2f2; color: #991b1b; font-weight: 600; }
+    .detail { font-size: 0.8rem; color: #6b7280; margin-left: 1.5rem; }
+  </style>
+</head>
+<body>
+  <!-- Provide a dummy #app so app.js doesn't crash -->
+  <div id="app" style="display:none;"></div>
+
+  <h1>Test Suite</h1>
+  <div id="summary" class="summary"></div>
+  <div id="results"></div>
+
+  <!-- Load the app code -->
+  <script src="questions.js"></script>
+  <script src="app.js"></script>
+
+  <script>
+  (function() {
+    const results = document.getElementById('results');
+    const summaryEl = document.getElementById('summary');
+    let passed = 0;
+    let failed = 0;
+    let currentSection = null;
+    let currentContainer = null;
+
+    function section(name) {
+      currentSection = name;
+      const div = document.createElement('div');
+      div.className = 'section';
+      div.innerHTML = `<h2>${name}</h2>`;
+      results.appendChild(div);
+      currentContainer = div;
+    }
+
+    function assert(name, condition, detail) {
+      const div = document.createElement('div');
+      if (condition) {
+        passed++;
+        div.className = 'test pass';
+        div.textContent = `\u2713 ${name}`;
+      } else {
+        failed++;
+        div.className = 'test fail';
+        div.textContent = `\u2717 ${name}`;
+        if (detail) {
+          const d = document.createElement('div');
+          d.className = 'detail';
+          d.textContent = detail;
+          div.appendChild(d);
+        }
+      }
+      currentContainer.appendChild(div);
+    }
+
+    // ===== 1. Question Bank Integrity =====
+    section('Question Bank');
+
+    assert('QUESTIONS is defined', typeof QUESTIONS !== 'undefined');
+    assert('Has 99 questions', QUESTIONS.length === 99, `Got ${QUESTIONS.length}`);
+    assert('Question 23 is omitted', !QUESTIONS.find(q => q.id === 23), 'Q23 should be removed (district-specific)');
+
+    const ids = QUESTIONS.map(q => q.id);
+    const uniqueIds = new Set(ids);
+    assert('All IDs are unique', ids.length === uniqueIds.size, `${ids.length} questions but ${uniqueIds.size} unique IDs`);
+
+    const validCategories = ['person', 'number', 'date', 'place', 'document-law', 'group-body', 'concept', 'event-war', 'action-description'];
+    const invalidCats = QUESTIONS.filter(q => !validCategories.includes(q.category));
+    assert('All questions have valid categories', invalidCats.length === 0,
+      invalidCats.length > 0 ? `Invalid: Q${invalidCats.map(q => q.id).join(', Q')}` : '');
+
+    const missingFields = QUESTIONS.filter(q => !q.id || !q.question || !q.answer || !q.category || !q.fullAnswer);
+    assert('All questions have required fields (id, question, answer, fullAnswer, category)', missingFields.length === 0,
+      missingFields.length > 0 ? `Missing fields: Q${missingFields.map(q => q.id).join(', Q')}` : '');
+
+    const answerNotInFull = QUESTIONS.filter(q => q.fullAnswer && !q.fullAnswer.includes(q.answer));
+    assert('Primary answer is in fullAnswer for every question', answerNotInFull.length === 0,
+      answerNotInFull.length > 0 ? `Mismatch: Q${answerNotInFull.map(q => q.id).join(', Q')}` : '');
+
+    // ===== 2. Hard Distractors =====
+    section('Hard Distractors');
+
+    assert('HARD_DISTRACTORS is defined', typeof HARD_DISTRACTORS !== 'undefined');
+
+    const qIdsInBank = new Set(QUESTIONS.map(q => q.id));
+    const distractorIds = Object.keys(HARD_DISTRACTORS).map(Number);
+    const orphanDistractors = distractorIds.filter(id => !qIdsInBank.has(id));
+    assert('No orphan distractor IDs (all map to real questions)', orphanDistractors.length === 0,
+      orphanDistractors.length > 0 ? `Orphan IDs: ${orphanDistractors.join(', ')}` : '');
+
+    const missingDistractors = QUESTIONS.filter(q => !HARD_DISTRACTORS[q.id]);
+    assert('Every question has hard distractors', missingDistractors.length === 0,
+      missingDistractors.length > 0 ? `Missing for Q${missingDistractors.map(q => q.id).join(', Q')}` : '');
+
+    const wrongCountDistractors = Object.entries(HARD_DISTRACTORS).filter(([id, arr]) => arr.length !== 3);
+    assert('Each distractor set has exactly 3 entries', wrongCountDistractors.length === 0,
+      wrongCountDistractors.length > 0 ? `Wrong count: Q${wrongCountDistractors.map(([id]) => id).join(', Q')}` : '');
+
+    // Check that distractors don't match the correct answer
+    let distractorMatchesAnswer = [];
+    QUESTIONS.forEach(q => {
+      const hd = HARD_DISTRACTORS[q.id];
+      if (!hd) return;
+      const fullAnswers = q.fullAnswer || [q.answer];
+      hd.forEach(d => {
+        if (isAcceptableAnswer(d, fullAnswers)) {
+          distractorMatchesAnswer.push({ id: q.id, distractor: d });
+        }
+      });
+    });
+    assert('No hard distractor matches an acceptable answer', distractorMatchesAnswer.length === 0,
+      distractorMatchesAnswer.length > 0 ? distractorMatchesAnswer.map(m => `Q${m.id}: "${m.distractor}"`).join('; ') : '');
+
+    // ===== 3. Funny Answers =====
+    section('Funny Answers');
+
+    assert('FUNNY_ANSWERS is defined', typeof FUNNY_ANSWERS !== 'undefined');
+
+    const categoriesUsed = [...new Set(QUESTIONS.map(q => q.category))];
+    const missingFunny = categoriesUsed.filter(cat => !FUNNY_ANSWERS[cat] || FUNNY_ANSWERS[cat].length === 0);
+    assert('Funny answers exist for every category in use', missingFunny.length === 0,
+      missingFunny.length > 0 ? `Missing: ${missingFunny.join(', ')}` : '');
+
+    const tooFewFunny = categoriesUsed.filter(cat => FUNNY_ANSWERS[cat] && FUNNY_ANSWERS[cat].length < 5);
+    assert('At least 5 funny answers per category', tooFewFunny.length === 0,
+      tooFewFunny.length > 0 ? `Too few: ${tooFewFunny.map(c => `${c}(${FUNNY_ANSWERS[c].length})`).join(', ')}` : '');
+
+    // ===== 4. Choice Builder =====
+    section('Choice Builder (buildChoices)');
+
+    const pools = buildAnswerPools(QUESTIONS);
+
+    // Run buildChoices on every question multiple times to check reliability
+    let choiceErrors = [];
+    let duplicateChoices = [];
+    let missingCorrect = [];
+    let missingFunnyChoice = [];
+
+    QUESTIONS.forEach(q => {
+      for (let trial = 0; trial < 5; trial++) {
+        const choices = buildChoices(q, pools);
+
+        // Must have exactly 4 choices
+        if (choices.length !== 4) {
+          choiceErrors.push(`Q${q.id} trial ${trial}: got ${choices.length} choices`);
+          return;
+        }
+
+        // Must have exactly 1 correct
+        const correctCount = choices.filter(c => c.type === 'correct').length;
+        if (correctCount !== 1) {
+          missingCorrect.push(`Q${q.id} trial ${trial}: ${correctCount} correct choices`);
+        }
+
+        // Must have exactly 1 funny
+        const funnyCount = choices.filter(c => c.type === 'funny').length;
+        if (funnyCount !== 1) {
+          missingFunnyChoice.push(`Q${q.id} trial ${trial}: ${funnyCount} funny choices`);
+        }
+
+        // No duplicate text
+        const texts = choices.map(c => c.text);
+        const uniqueTexts = new Set(texts);
+        if (texts.length !== uniqueTexts.size) {
+          duplicateChoices.push(`Q${q.id} trial ${trial}: duplicates — ${texts.join(' | ')}`);
+        }
+
+        // No undefined/null text
+        const badText = choices.filter(c => !c.text);
+        if (badText.length > 0) {
+          choiceErrors.push(`Q${q.id} trial ${trial}: has undefined/null choice text`);
+        }
+      }
+    });
+
+    assert('All questions produce exactly 4 choices (5 trials each)', choiceErrors.length === 0,
+      choiceErrors.length > 0 ? choiceErrors.slice(0, 5).join('; ') : '');
+    assert('Exactly 1 correct choice per question', missingCorrect.length === 0,
+      missingCorrect.length > 0 ? missingCorrect.slice(0, 5).join('; ') : '');
+    assert('Exactly 1 funny choice per question', missingFunnyChoice.length === 0,
+      missingFunnyChoice.length > 0 ? missingFunnyChoice.slice(0, 5).join('; ') : '');
+    assert('No duplicate answer text in choices', duplicateChoices.length === 0,
+      duplicateChoices.length > 0 ? duplicateChoices.slice(0, 5).join('; ') : '');
+
+    // Verify correct choice is from fullAnswer
+    let correctNotAcceptable = [];
+    QUESTIONS.forEach(q => {
+      const choices = buildChoices(q, pools);
+      const correctChoice = choices.find(c => c.type === 'correct');
+      const fullAnswers = q.fullAnswer || [q.answer];
+      if (correctChoice && !fullAnswers.includes(correctChoice.text)) {
+        correctNotAcceptable.push(`Q${q.id}: "${correctChoice.text}" not in fullAnswer`);
+      }
+    });
+    assert('Correct choice is always from fullAnswer', correctNotAcceptable.length === 0,
+      correctNotAcceptable.length > 0 ? correctNotAcceptable.slice(0, 5).join('; ') : '');
+
+    // ===== 5. isAcceptableAnswer =====
+    section('isAcceptableAnswer()');
+
+    assert('Exact match works', isAcceptableAnswer('the Constitution', ['the Constitution']));
+    assert('Case insensitive', isAcceptableAnswer('The Constitution', ['the Constitution']));
+    assert('Punctuation tolerance', isAcceptableAnswer('the Constitution.', ['the Constitution']));
+    assert('Multiple acceptable answers', isAcceptableAnswer('defines the government', ['sets up the government', 'defines the government', 'protects basic rights of Americans']));
+    assert('Rejects wrong answer', !isAcceptableAnswer('the Bill of Rights', ['the Constitution']));
+    assert('Rejects empty string', !isAcceptableAnswer('', ['the Constitution']));
+
+    // ===== 6. Answer Pool Builder =====
+    section('Answer Pools');
+
+    assert('buildAnswerPools returns pools', pools && typeof pools === 'object');
+    assert('Has _all pool', Array.isArray(pools._all));
+    assert('_all pool is deduplicated', pools._all.length === new Set(pools._all).size);
+
+    categoriesUsed.forEach(cat => {
+      assert(`Pool exists for "${cat}"`, Array.isArray(pools[cat]) && pools[cat].length > 0);
+    });
+
+    // ===== 7. Session Setup =====
+    section('Session Setup');
+
+    // Clear localStorage for predictable testing
+    localStorage.removeItem('weThePeopleWinter');
+
+    // Re-init app data
+    appData = loadData();
+    appData.userName = 'TestUser';
+    saveData(appData);
+
+    startSession();
+    assert('Session creates 20 questions', sessionQuestions.length === 20);
+    assert('Session creates 20 choice sets', sessionChoices.length === 20);
+    assert('currentIndex starts at 0', currentIndex === 0);
+    assert('score starts at 0', score === 0);
+
+    // All 20 questions should be unique
+    const sessionIds = sessionQuestions.map(q => q.id);
+    const uniqueSessionIds = new Set(sessionIds);
+    assert('All 20 session questions are unique', sessionIds.length === uniqueSessionIds.size);
+
+    // Run multiple sessions and check diversity
+    const sessionSets = [];
+    for (let i = 0; i < 5; i++) {
+      startSession();
+      sessionSets.push(new Set(sessionQuestions.map(q => q.id)));
+    }
+    // Check that not all sessions are identical
+    let allSame = true;
+    for (let i = 1; i < sessionSets.length; i++) {
+      const a = [...sessionSets[0]].sort().join(',');
+      const b = [...sessionSets[i]].sort().join(',');
+      if (a !== b) { allSame = false; break; }
+    }
+    assert('Multiple sessions produce different question sets', !allSame);
+
+    // ===== 8. Correct Answer Rotation =====
+    section('Correct Answer Rotation');
+
+    // Find questions with multiple fullAnswers and check that the displayed correct answer varies
+    const multiAnswerQs = QUESTIONS.filter(q => q.fullAnswer && q.fullAnswer.length > 1);
+    let rotationFound = false;
+    if (multiAnswerQs.length > 0) {
+      const testQ = multiAnswerQs[0];
+      const seen = new Set();
+      for (let i = 0; i < 50; i++) {
+        const choices = buildChoices(testQ, pools);
+        const correct = choices.find(c => c.type === 'correct');
+        seen.add(correct.text);
+      }
+      rotationFound = seen.size > 1;
+    }
+    assert('Correct answer rotates among fullAnswer entries (multi-answer questions)', rotationFound,
+      `Tested Q${multiAnswerQs[0]?.id}: saw ${rotationFound ? 'multiple' : 'only 1'} different correct answers in 50 trials`);
+
+    // ===== 9. Persistence =====
+    section('Persistence (localStorage)');
+
+    localStorage.removeItem('weThePeopleWinter');
+    let data = loadData();
+    assert('loadData returns defaults when empty', data.userName === '' && data.history.length === 0 && data.masteredIds.length === 0);
+
+    data.userName = 'TestWinter';
+    data.masteredIds = [1, 2, 3];
+    data.missedIds = [4, 5];
+    data.history = [{ userName: 'TestWinter', date: 'Apr 15, 2026', score: 18, total: 20, questionIds: [1,2,3] }];
+    saveData(data);
+
+    const reloaded = loadData();
+    assert('saveData/loadData round-trips userName', reloaded.userName === 'TestWinter');
+    assert('saveData/loadData round-trips masteredIds', JSON.stringify(reloaded.masteredIds) === JSON.stringify([1,2,3]));
+    assert('saveData/loadData round-trips missedIds', JSON.stringify(reloaded.missedIds) === JSON.stringify([4,5]));
+    assert('saveData/loadData round-trips history', reloaded.history.length === 1 && reloaded.history[0].score === 18);
+
+    // ===== 10. Priority-based Question Selection =====
+    section('Priority Question Selection');
+
+    localStorage.removeItem('weThePeopleWinter');
+    appData = loadData();
+    appData.userName = 'TestUser';
+    appData.missedIds = [1, 2, 3, 4, 5];
+    appData.masteredIds = [6, 7, 8, 9, 10];
+    saveData(appData);
+
+    startSession();
+    const first5Ids = sessionQuestions.slice(0, 5).map(q => q.id);
+    const missedInFirst5 = first5Ids.filter(id => [1,2,3,4,5].includes(id)).length;
+    assert('Missed questions are prioritized (at least 3 of first 5 are missed)', missedInFirst5 >= 3,
+      `Only ${missedInFirst5} missed questions in first 5`);
+
+    // ===== 11. allMastered Check =====
+    section('Mastery Check');
+
+    localStorage.removeItem('weThePeopleWinter');
+    appData = loadData();
+    assert('Not mastered when empty', !allMastered(appData));
+
+    appData.masteredIds = QUESTIONS.map(q => q.id);
+    assert('Mastered when all question IDs present', allMastered(appData));
+
+    appData.masteredIds = QUESTIONS.map(q => q.id).slice(0, -1);
+    assert('Not mastered when one is missing', !allMastered(appData));
+
+    // ===== 12. UI Utility Functions =====
+    section('Utility Functions');
+
+    assert('shuffle returns same length', shuffle([1,2,3,4,5]).length === 5);
+    assert('shuffle contains same elements', shuffle([1,2,3]).sort().join(',') === '1,2,3');
+    assert('pick returns an element from array', [1,2,3].includes(pick([1,2,3])));
+    assert('escapeHtml escapes <script>', escapeHtml('<script>').includes('&lt;'));
+
+    // ===== Cleanup =====
+    localStorage.removeItem('weThePeopleWinter');
+
+    // ===== Summary =====
+    const total = passed + failed;
+    summaryEl.textContent = `${passed} / ${total} tests passed${failed > 0 ? ` — ${failed} FAILED` : ' — All clear!'}`;
+    summaryEl.className = `summary ${failed > 0 ? 'fail' : 'pass'}`;
+  })();
+  </script>
+</body>
+</html>
