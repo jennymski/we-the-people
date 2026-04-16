@@ -416,11 +416,7 @@ function startSession() {
   score = 0;
   answers = [];
 
-  if (appData.userName) {
-    showQuestion();
-  } else {
-    showWelcome();
-  }
+  showWelcome();
 }
 
 // ── Render helper ──
