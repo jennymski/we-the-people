@@ -250,7 +250,22 @@ function buildChoices(question, pools) {
 
   // Pick 2 plausible distractors — prefer handcrafted hard ones
   const plausible = [];
-  const hardPool = HARD_DISTRACTORS[question.id];
+  let hardPool = HARD_DISTRACTORS[question.id];
+
+  // For state-specific questions, generate distractors from other states
+  if (typeof STATE_DATA !== 'undefined' && appData.userState) {
+    const otherStates = shuffle(Object.keys(STATE_DATA).filter(s => s !== appData.userState));
+    if (question.id === 20) {
+      // Senator — pick senators from other states
+      hardPool = otherStates.slice(0, 6).map(s => pick(STATE_DATA[s].senators));
+    } else if (question.id === 43) {
+      // Governor — pick governors from other states
+      hardPool = otherStates.slice(0, 6).map(s => STATE_DATA[s].governor);
+    } else if (question.id === 44) {
+      // Capital — pick capitals from other states
+      hardPool = otherStates.slice(0, 6).map(s => STATE_DATA[s].capital);
+    }
+  }
 
   if (hardPool) {
     const shuffledHard = shuffle(hardPool);
@@ -309,12 +324,13 @@ function loadData() {
     // Ensure all fields exist (backward compat)
     return {
       userName: data.userName || '',
+      userState: data.userState || 'Arizona',
       history: data.history || [],
       masteredIds: data.masteredIds || [],   // question IDs answered correctly at least once
       missedIds: data.missedIds || []        // question IDs answered wrong and not yet re-answered correctly
     };
   } catch (e) {
-    return { userName: '', history: [], masteredIds: [], missedIds: [] };
+    return { userName: '', userState: 'Arizona', history: [], masteredIds: [], missedIds: [] };
   }
 }
 
@@ -348,7 +364,30 @@ let score = 0;
 let answers = [];
 let appData = loadData();
 
+// ── Override state-specific questions based on user's state ──
+function applyStateOverrides() {
+  const st = STATE_DATA[appData.userState];
+  if (!st) return;
+
+  QUESTIONS.forEach(q => {
+    if (q.id === 20) {
+      // U.S. Senator
+      q.answer = st.senators[0];
+      q.fullAnswer = [...st.senators];
+    } else if (q.id === 43) {
+      // Governor
+      q.answer = st.governor;
+      q.fullAnswer = [st.governor];
+    } else if (q.id === 44) {
+      // State capital
+      q.answer = st.capital;
+      q.fullAnswer = [st.capital];
+    }
+  });
+}
+
 function startSession() {
+  applyStateOverrides();
   const pools = buildAnswerPools(QUESTIONS);
   const recentIds = getRecentQuestionIds(appData);
   const missedSet = new Set(appData.missedIds);
@@ -391,14 +430,22 @@ function render(html) {
 
 // ── Screen: Welcome ──
 function showWelcome() {
+  const stateOptions = Object.keys(STATE_DATA).map(s =>
+    `<option value="${escapeHtml(s)}"${s === appData.userState ? ' selected' : ''}>${escapeHtml(s)}</option>`
+  ).join('');
+
   render(`
     <div class="card welcome">
       <div class="welcome-icon" aria-hidden="true">&#x1F3DB;&#xFE0F;</div>
       <h1>We the People<br>(and Winter)</h1>
       <p>20 random questions to help you study for the GED civics test. You've got this!</p>
       <div class="name-input-row">
-        <label for="name-input" class="name-label">Your name:</label>
-        <input type="text" id="name-input" class="name-input" placeholder="Enter your name" value="${escapeHtml(appData.userName)}" autocomplete="off">
+        <label for="name-input" class="name-label">First name:</label>
+        <input type="text" id="name-input" class="name-input" placeholder="Enter your first name" value="${escapeHtml(appData.userName)}" autocomplete="off">
+      </div>
+      <div class="name-input-row">
+        <label for="state-select" class="name-label">Your state:</label>
+        <select id="state-select" class="name-input">${stateOptions}</select>
       </div>
       <button class="btn btn-primary" id="start-btn">Start Quiz</button>
       ${appData.history.length > 0 ? '<button class="btn btn-outline" id="history-btn" style="margin-top: 0.5rem;">View Past Results</button>' : ''}
@@ -413,7 +460,9 @@ function showWelcome() {
       return;
     }
     appData.userName = name;
+    appData.userState = document.getElementById('state-select').value;
     saveData(appData);
+    applyStateOverrides();
     showQuestion();
   });
 
